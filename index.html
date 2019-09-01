@@ -1,0 +1,193 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+
+    <title>Using node with fork(2)</title>
+
+    <link rel="stylesheet" href="css/reset.css">
+    <link rel="stylesheet" href="css/reveal.css">
+    <link rel="stylesheet" href="css/theme/black.css">
+
+    <!-- Theme used for syntax highlighting of code -->
+    <link rel="stylesheet" href="lib/css/vs2015.css">
+
+    <!-- Printing and PDF exports -->
+    <script>
+      var link = document.createElement( 'link' );
+      link.rel = 'stylesheet';
+      link.type = 'text/css';
+      link.href = window.location.search.match( /print-pdf/gi ) ? 'css/print/pdf.css' : 'css/print/paper.css';
+      document.getElementsByTagName( 'head' )[0].appendChild( link );
+    </script>
+  </head>
+  <body>
+    <div class="reveal">
+      <div class="slides">
+        <section data-markdown>
+          ## Using node with fork(2)
+          > Node.js And ShadowNode
+        </section>
+        <section data-markdown>
+          ### Why we want them
+        </section>
+        <section data-markdown>
+          ### Why we want them
+          1. Runtime 冷启动通常需要约 50~100ms
+          1. 嵌入式设备性能相当紧凑
+          1. 函数运行时请求响应时间敏感
+        </section>
+        <section data-markdown>
+          ## 嵌入式环境
+          1. 多进程适应多使用场景切换
+          1. 紧凑的设备性能、能耗限制
+        </section>
+        <section data-markdown>
+          ## 函数运行时
+          1. 需要良好的运行环境隔离
+          1. 需要控制每次执行资源使用
+        </section>
+        <section data-markdown>
+          ## 函数运行时
+          1. 单进程服务无法隔离运行环境 <!--更快的响应速度，无需每次创建环境-->
+          1. VM Contexts 无法隔离运行时操作 <!-- vm context 无法隔离运行时，如 ticks、microTasks -->
+          1. WorkerThreads 无法细分单次资源使用 <!--一定程度的环境隔离，（可以强行终止 JS 运行）-->
+        </section>
+        <section data-markdown>
+          ### What we want
+          1. 更低的 CPU 时间使用
+          1. 更快到达进程可使用状态
+          1. 能够良好地隔离运行环境
+          1. 能够良好地控制运行资源
+        </section>
+        <section data-markdown>
+          ### What happens on launch
+          1. 初始化 uv/vm/platform
+          1. (code-cache/snapshot)
+          1. bootstrap loader/node/env <!-- 模块 Loader/builtin 模块等 -->
+          1. main/pre_execution <!-- node 进程环境如 env/title 等 -->
+          1. user scripts
+          1. libraries
+        </section>
+        <section data-background="img/node-v10.16.0.png" data-background-size="contain"></section>
+        <section data-background="img/node-v12.8.1.png" data-background-size="contain"></section>
+        <section data-markdown>
+          ### 启动时间都消耗在哪儿了
+          1. Parsing/Compiling
+          1. Interpreting
+          1. Repeat
+        </section>
+        <section data-markdown>
+          ### Alternatives
+          1. code-cache
+          1. Ahead of Time
+          1. fork(2)
+        </section>
+        <section data-markdown>
+          Preloaded Modules List
+
+          - 嵌入式系统库
+          - 函数运行时库
+        </section>
+        <section data-markdown>
+          ### Prior Arts
+          1. Zygote
+          <!--
+Similar to preloaded classes in the zygote, ART attempts to pre-initialize a
+set of classes at compile time. This creates a ‘boot.art’ file that comprises
+an image of the compacted heap of pre-initialized classes and related objects.
+This file is mapped into memory upon zygote startup. While this consumes
+additional storage (typically 10MB), it speeds zygote startup and creates
+opportunities for the system to swap out some preloaded classes under memory
+pressure. This also contributes to improved low-RAM performance for ART, since
+in Dalvik much of this class information would have been stored in dirty pages
+in the linear alloc space. -->
+        </section>
+        <section data-markdown>
+          ### Recovering from fork(2)
+          1. 需要重新创建工作线程 <!-- VM Task Threads -->
+          1. 需要保护同步原语不被污染 <!-- 需要停止/不运行异步线程的工作，防止异步线程拿到同步锁；或者直接重置锁 -->
+          1. 重新初始化 IPC 句柄 <!-- Sockets/Semaphore -->
+        </section>
+        <section data-markdown>
+          ### fork(2) with node.js
+          1. 事件驱动范式
+          1. 单线程模型不代表单线程实现
+          1. Native Addon 访问系统 API
+        </section>
+        <section data-markdown>
+          ### Recover: uv_loop_fork
+          1. epoll backend fd
+          2. async backend fd
+          3. signals
+        </section>
+        <section data-markdown>
+          ### Recover: node platform
+          1. Threaded tasks from VM
+          1. Threaded tasks from JS land
+          1. Threaded tracing
+          1. 暂不支持 worker_threads
+        </section>
+        <section data-markdown>
+          ### Recover: node addons
+          1. 没有成标准 API 提供 addon 恢复线程工作
+          1. 同样 builtin 模块线程工作也无法恢复
+        </section>
+        <section data-markdown>
+          ### Limitations
+          1. 需要持续运行 seed 进程
+          1. seed 进程特性使用有较大限制
+          1. 需要有对系统的权限控制权限
+        </section>
+        <section data-markdown>
+          ## yodaos-project/hive
+        </section>
+        <section>
+          <pre><code>using 'node' as runtime... (node v12.8.1)
+fork/hive-fork-child-process.js n=100: 5.954ms
+fork/node-fork-child-process.js n=100: 27.218ms
+fork/node-spawn-child-process.js n=100: 24.239ms</code></pre>
+        </section>
+        <section>
+          <!-- 不需要任何库代码修改，只需要在 seed 进程 require 完成等待 fork 即可 -->
+          <pre><code>using 'node' as runtime... (node v12.8.1)
+require-lodash/hive-fork-child-process.js n=100: 5.872ms
+require-lodash/node-fork-child-process.js n=100: 37.843ms
+require-lodash/node-spawn-child-process.js n=100: 34.628ms</code></pre>
+        </section>
+        <section>
+          <pre><code>using 'iotjs' as runtime... (iotjs v0.11.7)
+fork-child-process.js n=100: 2.863ms
+node-fork-child-process.js n=100: 36.566ms
+node-spawn-child-process.js n=100: 25.797ms</code></pre>
+        </section>
+        <section data-markdown>
+          ### What's next
+          1. Collect Usage Case
+          1. Standardize Fork API
+        </section>
+        <section data-markdown>
+          Thanks
+          > @legendecas
+        </section>
+      </div>
+    </div>
+
+    <script src="js/reveal.js"></script>
+
+    <script>
+      // More info about config & dependencies:
+      // - https://github.com/hakimel/reveal.js#configuration
+      // - https://github.com/hakimel/reveal.js#dependencies
+      Reveal.initialize({
+        dependencies: [
+          { src: 'plugin/markdown/marked.js' },
+          { src: 'plugin/markdown/markdown.js' },
+          { src: 'plugin/notes/notes.js', async: true },
+          { src: 'plugin/highlight/highlight.js', async: true }
+        ]
+      });
+    </script>
+  </body>
+</html>
